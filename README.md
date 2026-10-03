@@ -19,10 +19,12 @@ cargo run
 
 Open http://127.0.0.1:8080
 
+Run `cargo run` from the project directory so it finds `.env`. The page re-reads that file every time you click Start, and it prints the path it loaded. If Gemini or Grok rejects the session, the reason stays on the page.
+
 | Variable | Purpose |
 | --- | --- |
 | `GEMINI_API_KEY` | Google AI Studio key. `GOOGLE_API_KEY` is also accepted. |
-| `XAI_API_KEY` | xAI key used for Grok streaming TTS. |
+| `XAI_API_KEY` | xAI key used for Grok streaming TTS. `GROK_API_KEY` is also accepted. |
 | `GEMINI_LIVE_MODEL` | Optional. Defaults to `gemini-3.8-live`. |
 | `PORT` | Optional. Defaults to `8080`. |
 

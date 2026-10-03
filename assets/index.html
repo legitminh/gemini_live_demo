@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Booth — Gemini Live, spoken by Grok</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,460;9..144,620&family=Outfit:wght@380;520&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #1a1714;
+      --paper: #f3ecdf;
+      --paper-2: #e7ddcd;
+      --line: #d5c9b6;
+      --muted: #6f675d;
+      --gemini: #2d5bd0;
+      --grok: #c45c12;
+      --live: #9c2f2f;
+      --ok: #2f6b45;
+      --shadow: 0 18px 50px rgba(40, 28, 16, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 500px at 10% -10%, #fff8ec 0%, transparent 55%),
+        linear-gradient(180deg, #f7f1e6 0%, var(--paper) 40%, #efe4d4 100%);
+      font-family: "Outfit", "Avenir Next", "Segoe UI", sans-serif;
+      font-weight: 380;
+    }
+
+    .wrap {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 28px 20px 40px;
+      min-height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-end;
+    }
+
+    .mark {
+      font-family: "Fraunces", Georgia, serif;
+      font-size: 40px;
+      letter-spacing: -0.04em;
+      margin: 0;
+    }
+    .sub { margin: 4px 0 0; color: var(--muted); max-width: 46ch; }
+
+    .keys {
+      border: 1px solid var(--line);
+      background: rgba(255, 252, 247, 0.7);
+      border-radius: 14px;
+      padding: 10px 12px;
+      font-size: 13px;
+      min-width: 220px;
+    }
+    .keys strong { font-weight: 520; }
+    .keys code {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 12px;
+    }
+    .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 99px;
+      margin-right: 6px;
+      background: var(--live);
+    }
+    .dot.on { background: var(--ok); }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr auto 1fr;
+      gap: 8px;
+      align-items: center;
+    }
+    .stage {
+      border: 1px solid var(--line);
+      background: rgba(255, 252, 247, 0.72);
+      border-radius: 16px;
+      padding: 12px 14px;
+      min-height: 74px;
+    }
+    .stage small {
+      display: block;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-size: 11px;
+    }
+    .stage b { font-family: "Fraunces", Georgia, serif; font-weight: 620; font-size: 18px; }
+    .stage.active { border-color: var(--ink); background: #fffaf3; }
+    .stage.you.active { box-shadow: inset 0 0 0 1px #2d5bd033; }
+    .stage.gemini.active { box-shadow: inset 0 0 0 1px #2d5bd055; }
+    .stage.grok.active { box-shadow: inset 0 0 0 1px #c45c1255; }
+    .arrow { color: var(--muted); font-size: 20px; }
+
+    .layout {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1.4fr 0.8fr;
+      gap: 16px;
+      min-height: 460px;
+    }
+
+    .panel {
+      background: rgba(255, 252, 247, 0.78);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+    }
+
+    .transcript {
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      min-height: 460px;
+    }
+    #log {
+      flex: 1;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding-right: 4px;
+    }
+    .empty {
+      margin: auto;
+      text-align: center;
+      color: var(--muted);
+      max-width: 36ch;
+    }
+    .bubble {
+      max-width: 78%;
+      padding: 10px 12px;
+      border-radius: 14px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
+    .bubble.user {
+      align-self: flex-end;
+      background: #2d5bd0;
+      color: #f7f4ee;
+      border-bottom-right-radius: 4px;
+    }
+    .bubble.assistant {
+      align-self: flex-start;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-bottom-left-radius: 4px;
+    }
+    .bubble .who {
+      display: block;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      opacity: 0.7;
+      margin-bottom: 3px;
+    }
+    .composer {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    input, select, button { font: inherit; color: inherit; }
+    input[type="text"], select {
+      border: 1px solid var(--line);
+      background: #fffdf9;
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
+    input[type="text"] { flex: 1; }
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 10px 14px;
+      background: var(--ink);
+      color: var(--paper);
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+
+    .controls {
+      padding: 22px 18px;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 14px;
+    }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field span { color: var(--muted); font-size: 13px; }
+    select { width: 100%; }
+
+    .talk {
+      margin: 8px auto;
+      width: 148px;
+      height: 148px;
+      border-radius: 50%;
+      border: 0;
+      background: var(--ink);
+      color: #f6f0e6;
+      font-family: "Fraunces", Georgia, serif;
+      font-size: 22px;
+      cursor: pointer;
+      box-shadow: 0 10px 30px rgba(26, 23, 20, 0.25);
+    }
+    .talk.listening { background: var(--gemini); }
+    .talk.thinking { background: #1d3e93; }
+    .talk.speaking { background: var(--grok); }
+    .talk.connecting { background: #5c5348; }
+    .phase { text-align: center; color: var(--muted); min-height: 1.2em; }
+    .meter {
+      height: 8px;
+      border-radius: 99px;
+      background: var(--paper-2);
+      overflow: hidden;
+    }
+    .meter > div {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--gemini), var(--grok));
+    }
+    .note { color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .error {
+      display: none;
+      background: #f8e4dc;
+      border: 1px solid #e3b2a4;
+      color: #6d2418;
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
+    .error.show { display: block; }
+
+    @media (max-width: 800px) {
+      header, .layout, .pipeline { display: flex; flex-direction: column; }
+      .arrow { transform: rotate(90deg); align-self: center; }
+      .keys { width: 100%; }
+      .mark { font-size: 34px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1 class="mark">Booth</h1>
+        <p class="sub">You talk. Gemini Live decides what to say. Grok Voice is the one who says it.</p>
+      </div>
+      <div class="keys" id="keys">Checking keys…</div>
+    </header>
+
+    <div class="pipeline" aria-hidden="true">
+      <div class="stage you" id="stage-you"><small>Microphone</small><b>You</b></div>
+      <div class="arrow">→</div>
+      <div class="stage gemini" id="stage-gemini"><small>Understands</small><b>Gemini Live</b></div>
+      <div class="arrow">→</div>
+      <div class="stage grok" id="stage-grok"><small>Speaks</small><b>Grok Voice</b></div>
+    </div>
+
+    <div class="layout">
+      <section class="panel transcript">
+        <div id="log" aria-live="polite">
+          <div class="empty" id="empty">Start a conversation and talk. The transcript lands here. Only Grok’s voice comes out of the speakers.</div>
+        </div>
+        <form class="composer" id="composer">
+          <input id="typed" type="text" maxlength="2000" placeholder="Or type a line" autocomplete="off" disabled />
+          <button type="submit" id="send" disabled>Send</button>
+        </form>
+      </section>
+
+      <aside class="panel controls">
+        <div class="error" id="error" role="alert"></div>
+        <label class="field">Voice
+          <select id="voice"></select>
+        </label>
+        <label class="field">Language
+          <select id="language"></select>
+        </label>
+        <button class="talk" id="talk" type="button">Start</button>
+        <div class="phase" id="phase">Idle</div>
+        <div class="meter" aria-hidden="true"><div id="meter"></div></div>
+        <p class="note">Headphones help. The mic stays open while Grok is talking so you can interrupt. Echo cancellation is on, and a loud room can still cut Grok off early.</p>
+        <button class="secondary" id="stop" type="button" disabled>End conversation</button>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const talk = document.getElementById("talk");
+    const stopBtn = document.getElementById("stop");
+    const voiceSelect = document.getElementById("voice");
+    const languageSelect = document.getElementById("language");
+    const keys = document.getElementById("keys");
+    const log = document.getElementById("log");
+    const empty = document.getElementById("empty");
+    const errorBox = document.getElementById("error");
+    const phaseLabel = document.getElementById("phase");
+    const typed = document.getElementById("typed");
+    const sendBtn = document.getElementById("send");
+    const meter = document.getElementById("meter");
+    const composer = document.getElementById("composer");
+
+    let socket = null;
+    let audioCtx = null;
+    let media = null;
+    let worklet = null;
+    let epoch = 1;
+    let playhead = 0;
+    let sources = [];
+    let leftover = new Uint8Array(0);
+    let phase = "idle";
+    let keysReady = false;
+    let bargeHits = 0;
+    let barged = false;
+    let modelName = "gemini-3.8-live";
+
+    const phaseCopy = {
+      idle: "Idle",
+      connecting: "Connecting to Gemini and Grok",
+      listening: "Listening",
+      thinking: "Gemini is answering",
+      speaking: "Grok is speaking",
+    };
+
+    function setPhase(next) {
+      phase = next;
+      phaseLabel.textContent = phaseCopy[next] || next;
+      talk.className = "talk" + (next === "idle" ? "" : " " + next);
+      talk.textContent = next === "idle" ? "Start" : "Live";
+      document.getElementById("stage-you").classList.toggle("active", next === "listening");
+      document.getElementById("stage-gemini").classList.toggle("active", next === "thinking" || next === "connecting");
+      document.getElementById("stage-grok").classList.toggle("active", next === "speaking");
+    }
+
+    function showError(message) {
+      errorBox.textContent = message;
+      errorBox.classList.add("show");
+    }
+
+    function clearError() {
+      errorBox.classList.remove("show");
+      errorBox.textContent = "";
+    }
+
+    function upsert(role, text, isFinal) {
+      if (empty) empty.remove();
+      const last = log.lastElementChild;
+      if (last && last.dataset.role === role && last.dataset.sealed !== "true") {
+        last.querySelector(".body").textContent = text;
+        if (isFinal) last.dataset.sealed = "true";
+      } else {
+        const bubble = document.createElement("div");
+        bubble.className = "bubble " + (role === "user" ? "user" : "assistant");
+        bubble.dataset.role = role;
+        bubble.dataset.sealed = isFinal ? "true" : "false";
+        const who = document.createElement("span");
+        who.className = "who";
+        who.textContent = role === "user" ? "You" : "Gemini, via Grok";
+        const body = document.createElement("div");
+        body.className = "body";
+        body.textContent = text;
+        bubble.append(who, body);
+        log.append(bubble);
+      }
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function stopPlayback() {
+      for (const source of sources) {
+        try { source.stop(); } catch (_) { /* already stopped */ }
+      }
+      sources = [];
+      playhead = 0;
+      leftover = new Uint8Array(0);
+      barged = false;
+      bargeHits = 0;
+    }
+
+    function enqueuePcm(base64, messageEpoch) {
+      if (!audioCtx || messageEpoch !== epoch) return;
+      const binary = atob(base64);
+      const fresh = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) fresh[i] = binary.charCodeAt(i);
+      const combined = new Uint8Array(leftover.length + fresh.length);
+      combined.set(leftover, 0);
+      combined.set(fresh, leftover.length);
+      const samples = combined.length >> 1;
+      leftover = combined.slice(samples * 2);
+      if (samples === 0) return;
+      const floats = new Float32Array(samples);
+      const view = new DataView(combined.buffer, combined.byteOffset, samples * 2);
+      for (let i = 0; i < samples; i += 1) floats[i] = view.getInt16(i * 2, true) / 32768;
+      const buffer = audioCtx.createBuffer(1, samples, 24000);
+      buffer.copyToChannel(floats, 0);
+      const source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioCtx.destination);
+      const now = audioCtx.currentTime;
+      if (playhead < now + 0.02) playhead = now + 0.02;
+      source.start(playhead);
+      playhead += buffer.duration;
+      sources.push(source);
+      source.onended = () => {
+        sources = sources.filter((item) => item !== source);
+      };
+    }
+
+    function bytesToBase64(buffer) {
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      const stride = 0x8000;
+      for (let i = 0; i < bytes.length; i += stride) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + stride));
+      }
+      return btoa(binary);
+    }
+
+    function sendJson(payload) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(payload));
+      }
+    }
+
+    function onLevel(rms) {
+      meter.style.width = Math.min(100, rms * 280) + "%";
+      const playing = playhead > (audioCtx ? audioCtx.currentTime + 0.05 : 0);
+      if (playing && rms > 0.12) bargeHits += 1;
+      else bargeHits = 0;
+      if (playing && bargeHits > 5 && !barged) {
+        barged = true;
+        sendJson({ type: "barge" });
+        stopPlayback();
+        setPhase("listening");
+      }
+    }
+
+    async function startMic() {
+      media = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+        video: false,
+      });
+      await audioCtx.audioWorklet.addModule("/pcm-worklet.js");
+      const source = audioCtx.createMediaStreamSource(media);
+      worklet = new AudioWorkletNode(audioCtx, "pcm-capture");
+      worklet.port.onmessage = (event) => {
+        if (typeof event.data.rms === "number") {
+          meter.style.width = Math.min(100, event.data.rms * 280) + "%";
+        }
+        if (event.data.pcm) {
+          if (typeof event.data.rms === "number") onLevel(event.data.rms);
+          sendJson({ type: "audio", pcm: bytesToBase64(event.data.pcm) });
+        }
+      };
+      source.connect(worklet);
+    }
+
+    function stopMic() {
+      if (worklet) {
+        worklet.disconnect();
+        worklet = null;
+      }
+      if (media) {
+        for (const track of media.getTracks()) track.stop();
+        media = null;
+      }
+    }
+
+    function handleMessage(raw) {
+      const message = JSON.parse(raw);
+      if (message.type === "ready") {
+        modelName = message.model || modelName;
+        clearError();
+        return;
+      }
+      if (message.type === "status") {
+        setPhase(message.phase);
+        if (message.phase === "listening") barged = false;
+        return;
+      }
+      if (message.type === "user") {
+        upsert("user", message.text, message.final);
+        return;
+      }
+      if (message.type === "assistant") {
+        upsert("assistant", message.text, message.final);
+        return;
+      }
+      if (message.type === "audio") {
+        enqueuePcm(message.pcm, message.epoch);
+        return;
+      }
+      if (message.type === "audio_end") {
+        if (message.epoch === epoch) barged = false;
+        return;
+      }
+      if (message.type === "clear_audio") {
+        epoch = message.epoch;
+        stopPlayback();
+        return;
+      }
+      if (message.type === "error") {
+        showError(message.message);
+        endConversation(false);
+      }
+    }
+
+    async function startConversation() {
+      clearError();
+      if (!keysReady) {
+        showError("Add GEMINI_API_KEY and XAI_API_KEY to the server, then restart.");
+        return;
+      }
+      audioCtx = new AudioContext();
+      if (audioCtx.state === "suspended") await audioCtx.resume();
+      setPhase("connecting");
+      talk.disabled = true;
+      voiceSelect.disabled = true;
+      languageSelect.disabled = true;
+      const protocol = location.protocol === "https:" ? "wss" : "ws";
+      socket = new WebSocket(protocol + "://" + location.host + "/ws");
+      await new Promise((resolve, reject) => {
+        socket.onopen = resolve;
+        socket.onerror = () => reject(new Error("Could not open the voice socket"));
+      });
+      socket.onmessage = (event) => handleMessage(event.data);
+      socket.onerror = () => showError("The voice connection failed.");
+      socket.onclose = () => {
+        if (phase !== "idle") endConversation(false);
+      };
+      sendJson({
+        type: "start",
+        voice: voiceSelect.value,
+        language: languageSelect.value,
+      });
+      try {
+        await startMic();
+      } catch (error) {
+        showError("Microphone unavailable (" + error.message + "). You can still type.");
+      }
+      typed.disabled = false;
+      sendBtn.disabled = false;
+      stopBtn.disabled = false;
+    }
+
+    function endConversation(notify) {
+      if (notify !== false) sendJson({ type: "stop" });
+      stopMic();
+      stopPlayback();
+      if (socket) {
+        socket.onclose = null;
+        socket.close();
+        socket = null;
+      }
+      if (audioCtx) {
+        audioCtx.close().catch(() => {});
+        audioCtx = null;
+      }
+      setPhase("idle");
+      talk.disabled = !keysReady;
+      stopBtn.disabled = true;
+      typed.disabled = true;
+      sendBtn.disabled = true;
+      voiceSelect.disabled = false;
+      languageSelect.disabled = false;
+      meter.style.width = "0%";
+    }
+
+    talk.addEventListener("click", () => {
+      if (phase === "idle") startConversation().catch((error) => {
+        showError(error.message);
+        endConversation(false);
+      });
+    });
+    stopBtn.addEventListener("click", () => endConversation(true));
+    composer.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const text = typed.value.trim();
+      if (!text) return;
+      sendJson({ type: "text", text });
+      typed.value = "";
+    });
+
+    fetch("/api/status")
+      .then((response) => response.json())
+      .then((status) => {
+        keysReady = status.gemini && status.xai;
+        modelName = status.model;
+        for (const voice of status.voices) {
+          const option = document.createElement("option");
+          option.value = voice.id;
+          option.textContent = voice.name + " — " + voice.note;
+          if (voice.id === "eve") option.selected = true;
+          voiceSelect.append(option);
+        }
+        for (const language of status.languages) {
+          const option = document.createElement("option");
+          option.value = language.id;
+          option.textContent = language.name;
+          languageSelect.append(option);
+        }
+        const geminiDot = status.gemini ? "on" : "";
+        const xaiDot = status.xai ? "on" : "";
+        keys.innerHTML =
+          "<div><span class='dot " + geminiDot + "'></span><strong>Gemini</strong> " + (status.gemini ? "key set" : "needs GEMINI_API_KEY") + "</div>" +
+          "<div><span class='dot " + xaiDot + "'></span><strong>Grok</strong> " + (status.xai ? "key set" : "needs XAI_API_KEY") + "</div>" +
+          "<div style='margin-top:6px;color:#6f675d'>" + modelName + "</div>";
+        talk.disabled = !keysReady;
+        if (!keysReady) {
+          showError("The server needs GEMINI_API_KEY and XAI_API_KEY before a conversation can start.");
+        }
+      })
+      .catch(() => showError("Could not read /api/status"));
+  </script>
+</body>
+</html>

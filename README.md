@@ -37,7 +37,7 @@ Keys stay on the server. The page only learns whether each key is present.
 3. Gemini audio chunks are dropped. Output transcript fragments are sent to `wss://api.x.ai/v1/tts` as `text.delta` / `text.done`.
 4. Grok returns 24 kHz PCM. The browser plays it. Talking over Grok sends a barge-in, which clears Grok and lets Gemini interrupt.
 
-You can also type a line. That is sent as a Gemini client turn and spoken by Grok the same way.
+You can type a line without using the microphone. Send starts the session and Grok speaks the reply. The mic only works on `http://localhost:8080` (or HTTPS). A page opened by IP address has no microphone API, and the text box still works.
 
 Headphones work better than speakers. Echo cancellation is enabled, but a loud room can still trip the barge-in.
 

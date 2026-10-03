@@ -4,6 +4,7 @@ mod gemini;
 mod grok;
 mod session;
 mod speech;
+mod vad;
 
 use std::sync::Arc;
 

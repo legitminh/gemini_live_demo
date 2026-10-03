@@ -15,6 +15,7 @@ use crate::config::AppConfig;
 use crate::gemini::{self, gemini_audio_bytes};
 use crate::grok;
 use crate::speech::{SpeechAction, SpeechQueue};
+use crate::vad::{silence_pcm, MicAction, MicGate};
 
 const MAX_PCM_BYTES: usize = 64 * 1024;
 const SAMPLE_RATE: u32 = 24_000;
@@ -33,6 +34,8 @@ enum Inbound {
         text: String,
     },
     Barge,
+    /// The browser heard the person stop talking.
+    AudioEnd,
     Stop,
 }
 
@@ -220,10 +223,19 @@ async fn drive(
     let mut suppress_speech = false;
     let mut dropped_gemini_audio = 0usize;
     let mut discard_deadline: Option<tokio::time::Instant> = None;
+    let mut mic_gate = MicGate::default();
+    let mut forwarded_audio = 0usize;
 
     loop {
         let discard_wait = async {
             match discard_deadline {
+                Some(deadline) => tokio::time::sleep_until(deadline).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        let flush_at = mic_gate.deadline();
+        let flush_wait = async {
+            match flush_at {
                 Some(deadline) => tokio::time::sleep_until(deadline).await,
                 None => std::future::pending::<()>().await,
             }
@@ -241,11 +253,27 @@ async fn drive(
                             Inbound::Stop => break,
                             Inbound::Audio { pcm } => {
                                 let bytes = decode_pcm(&pcm)?;
-                                let payload = gemini::audio_message(&bytes).to_string();
-                                gemini_write
-                                    .send(UpstreamMessage::Text(payload.into()))
-                                    .await
-                                    .context("failed to forward audio to Gemini")?;
+                                match mic_gate.observe(&bytes, tokio::time::Instant::now()) {
+                                    MicAction::Drop => {}
+                                    MicAction::Forward => {
+                                        forwarded_audio += bytes.len();
+                                        forward_mic_audio(&mut gemini_write, &bytes).await?;
+                                    }
+                                    MicAction::Close => {
+                                        forwarded_audio += bytes.len();
+                                        info!(forwarded_audio, "pause after speech");
+                                        forwarded_audio = 0;
+                                        forward_mic_audio(&mut gemini_write, &bytes).await?;
+                                        send_turn_silence(&mut gemini_write).await?;
+                                    }
+                                }
+                            }
+                            Inbound::AudioEnd => {
+                                if mic_gate.end_now(tokio::time::Instant::now()) {
+                                    info!(forwarded_audio, "browser ended the spoken turn");
+                                    forwarded_audio = 0;
+                                    send_turn_silence(&mut gemini_write).await?;
+                                }
                             }
                             Inbound::Text { text } => {
                                 let text = text.trim();
@@ -318,7 +346,9 @@ async fn drive(
                         break;
                     }
                     other => {
-                        let Some(payload) = gemini::text_payload(other) else { continue };
+                        let Some(payload) = gemini::text_payload(other) else {
+                            continue;
+                        };
                         let value: serde_json::Value = match serde_json::from_str(&payload) {
                             Ok(value) => value,
                             Err(_) => continue,
@@ -421,6 +451,13 @@ async fn drive(
                 discard_deadline = None;
                 let actions = speech.force_ready();
                 apply_actions(&mut speech, actions, to_client, &mut grok_write, &mut discard_deadline).await?;
+            }
+            _ = flush_wait => {
+                if mic_gate.end_now(tokio::time::Instant::now()) {
+                    info!(forwarded_audio, "pause timer after speech");
+                    forwarded_audio = 0;
+                    send_turn_silence(&mut gemini_write).await?;
+                }
             }
         }
     }
@@ -552,6 +589,26 @@ async fn apply_actions(
         }
     }
     Ok(hard_fail)
+}
+
+async fn forward_mic_audio(
+    gemini_write: &mut (impl SinkExt<UpstreamMessage, Error = tokio_tungstenite::tungstenite::Error>
+              + Unpin),
+    pcm: &[u8],
+) -> Result<()> {
+    let payload = gemini::audio_message(pcm).to_string();
+    gemini_write
+        .send(UpstreamMessage::Text(payload.into()))
+        .await
+        .context("failed to forward audio to Gemini")
+}
+
+async fn send_turn_silence(
+    gemini_write: &mut (impl SinkExt<UpstreamMessage, Error = tokio_tungstenite::tungstenite::Error>
+              + Unpin),
+) -> Result<()> {
+    info!("user stopped talking; sending a pause so Gemini can answer");
+    forward_mic_audio(gemini_write, &silence_pcm()).await
 }
 
 fn parse_inbound(text: &str) -> Result<Inbound> {

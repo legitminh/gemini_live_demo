@@ -273,11 +273,11 @@
     <div class="layout">
       <section class="panel transcript">
         <div id="log" aria-live="polite">
-          <div class="empty" id="empty">Start a conversation and talk. The transcript lands here. Only Grok’s voice comes out of the speakers.</div>
+          <div class="empty" id="empty">Type a line, or start and talk. The transcript lands here. Only Grok’s voice comes out of the speakers.</div>
         </div>
         <form class="composer" id="composer">
-          <input id="typed" type="text" maxlength="2000" placeholder="Or type a line" autocomplete="off" disabled />
-          <button type="submit" id="send" disabled>Send</button>
+          <input id="typed" type="text" maxlength="2000" placeholder="Type a message" autocomplete="off" />
+          <button type="submit" id="send">Send</button>
         </form>
       </section>
 
@@ -292,7 +292,7 @@
         <button class="talk" id="talk" type="button">Start</button>
         <div class="phase" id="phase">Idle</div>
         <div class="meter" aria-hidden="true"><div id="meter"></div></div>
-        <p class="note">Headphones help. The mic stays open while Grok is talking so you can interrupt. Echo cancellation is on, and a loud room can still cut Grok off early.</p>
+        <p class="note" id="mic-note">Click Start, say one sentence, then pause. Headphones keep Grok from hearing itself. You can also type.</p>
         <button class="secondary" id="stop" type="button" disabled>End conversation</button>
       </aside>
     </div>
@@ -312,6 +312,7 @@
     const sendBtn = document.getElementById("send");
     const meter = document.getElementById("meter");
     const composer = document.getElementById("composer");
+    const micNote = document.getElementById("mic-note");
 
     let socket = null;
     let audioCtx = null;
@@ -319,6 +320,12 @@
     let optionsReady = false;
     let media = null;
     let worklet = null;
+    let micSource = null;
+    let micMute = null;
+    let micTimer = null;
+    let micFrames = 0;
+    let lastSpeechAt = 0;
+    let turnOpen = false;
     let epoch = 1;
     let playhead = 0;
     let sources = [];
@@ -328,6 +335,8 @@
     let bargeHits = 0;
     let barged = false;
     let modelName = "gemini-3.8-live";
+    let pendingLine = "";
+    let opening = null;
 
     const phaseCopy = {
       idle: "Idle",
@@ -345,6 +354,22 @@
       document.getElementById("stage-you").classList.toggle("active", next === "listening");
       document.getElementById("stage-gemini").classList.toggle("active", next === "thinking" || next === "connecting");
       document.getElementById("stage-grok").classList.toggle("active", next === "speaking");
+      setComposerEnabled(keysReady);
+    }
+
+    function setComposerEnabled(enabled) {
+      typed.disabled = !enabled;
+      sendBtn.disabled = !enabled;
+    }
+
+    function micBlockReason() {
+      if (!window.isSecureContext) {
+        return "The microphone needs a secure page. Open http://localhost:" + (location.port || "8080") + " instead of an IP address, or type in the box.";
+      }
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+        return "This browser has no microphone. Open http://localhost:" + (location.port || "8080") + " in Chrome or Safari, or type in the box.";
+      }
+      return "";
     }
 
     function showError(message) {
@@ -451,7 +476,14 @@
       }
     }
 
+    function playbackActive() {
+      return Boolean(audioCtx) && playhead > audioCtx.currentTime + 0.08;
+    }
+
     async function startMic() {
+      const blocked = micBlockReason();
+      if (blocked) throw new Error(blocked);
+      if (audioCtx.state === "suspended") await audioCtx.resume();
       media = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -462,24 +494,71 @@
         video: false,
       });
       await audioCtx.audioWorklet.addModule("/pcm-worklet.js");
-      const source = audioCtx.createMediaStreamSource(media);
+      micSource = audioCtx.createMediaStreamSource(media);
       worklet = new AudioWorkletNode(audioCtx, "pcm-capture");
+      micMute = audioCtx.createGain();
+      micMute.gain.value = 0;
+      micFrames = 0;
+      lastSpeechAt = 0;
+      turnOpen = false;
       worklet.port.onmessage = (event) => {
+        const rms = typeof event.data.rms === "number" ? event.data.rms : 0;
         if (typeof event.data.rms === "number") {
-          meter.style.width = Math.min(100, event.data.rms * 280) + "%";
+          meter.style.width = Math.min(100, rms * 280) + "%";
+          onLevel(rms);
+        }
+        const now = performance.now();
+        if (rms >= 0.012) {
+          lastSpeechAt = now;
+          if (!turnOpen) {
+            turnOpen = true;
+            micNote.textContent = "Hearing you. Finish the sentence, then pause.";
+          }
+        }
+        if (!turnOpen) return;
+        // Speaker audio would otherwise keep the turn open and cancel the reply.
+        if (playbackActive() && !barged) {
+          commitTurn();
+          return;
         }
         if (event.data.pcm) {
-          if (typeof event.data.rms === "number") onLevel(event.data.rms);
+          micFrames += 1;
           sendJson({ type: "audio", pcm: bytesToBase64(event.data.pcm) });
         }
+        if (now - lastSpeechAt >= 1100) commitTurn();
       };
-      source.connect(worklet);
+      micSource.connect(worklet);
+      worklet.connect(micMute);
+      micMute.connect(audioCtx.destination);
+      clearTimeout(micTimer);
+      micTimer = setTimeout(() => {
+        if (micFrames === 0 && phase !== "idle") {
+          micNote.textContent = "The microphone is open but no sound is arriving. Allow the mic for this page, or type a message and press Send.";
+        }
+      }, 2500);
+    }
+
+    function commitTurn() {
+      if (!turnOpen) return;
+      turnOpen = false;
+      sendJson({ type: "audio_end" });
+      micNote.textContent = "Heard you. Waiting for the reply.";
     }
 
     function stopMic() {
+      if (turnOpen) commitTurn();
+      clearTimeout(micTimer);
       if (worklet) {
         worklet.disconnect();
         worklet = null;
+      }
+      if (micSource) {
+        micSource.disconnect();
+        micSource = null;
+      }
+      if (micMute) {
+        micMute.disconnect();
+        micMute = null;
       }
       if (media) {
         for (const track of media.getTracks()) track.stop();
@@ -492,6 +571,11 @@
       if (message.type === "ready") {
         modelName = message.model || modelName;
         clearError();
+        if (pendingLine) {
+          const line = pendingLine;
+          pendingLine = "";
+          sendJson({ type: "text", text: line });
+        }
         return;
       }
       if (message.type === "status") {
@@ -526,18 +610,35 @@
       }
     }
 
-    async function startConversation() {
+    function ensureAudio() {
+      if (!audioCtx || audioCtx.state === "closed") audioCtx = new AudioContext();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+    }
+
+    async function startConversation(withMic) {
+      if (opening) return opening;
+      opening = openSession(withMic).finally(() => {
+        opening = null;
+      });
+      return opening;
+    }
+
+    async function openSession(withMic) {
       clearError();
       if (!keysReady) {
-        showError("Add GEMINI_API_KEY and XAI_API_KEY to the server, then restart.");
+        showError("Add GEMINI_API_KEY and XAI_API_KEY to the server, then click Start again.");
+        if (pendingLine) {
+          typed.value = pendingLine;
+          pendingLine = "";
+        }
         return;
       }
-      audioCtx = new AudioContext();
-      if (audioCtx.state === "suspended") await audioCtx.resume();
+      ensureAudio();
       setPhase("connecting");
       talk.disabled = true;
       voiceSelect.disabled = true;
       languageSelect.disabled = true;
+      setComposerEnabled(true);
       const protocol = location.protocol === "https:" ? "wss" : "ws";
       socket = new WebSocket(protocol + "://" + location.host + "/ws");
       await new Promise((resolve, reject) => {
@@ -559,14 +660,18 @@
         voice: voiceSelect.value,
         language: languageSelect.value,
       });
-      try {
-        await startMic();
-      } catch (error) {
-        showError("Microphone unavailable (" + error.message + "). You can still type.");
-      }
-      typed.disabled = false;
-      sendBtn.disabled = false;
       stopBtn.disabled = false;
+      if (!withMic) {
+        micNote.textContent = "Typing only. Click Start if you want the microphone.";
+        return;
+      }
+      // The socket is already live. Waiting here would swallow typed messages
+      // until the browser finished the microphone prompt.
+      startMic().then(() => {
+        micNote.textContent = "Microphone is on. Say one sentence, then pause.";
+      }).catch((error) => {
+        micNote.textContent = error.message;
+      });
     }
 
     function endConversation(notify) {
@@ -585,18 +690,22 @@
       setPhase("idle");
       talk.disabled = false;
       stopBtn.disabled = true;
-      typed.disabled = true;
-      sendBtn.disabled = true;
+      setComposerEnabled(keysReady);
       voiceSelect.disabled = false;
       languageSelect.disabled = false;
       meter.style.width = "0%";
+      if (pendingLine) {
+        typed.value = pendingLine;
+        pendingLine = "";
+      }
     }
 
     talk.addEventListener("click", () => {
       if (phase !== "idle") return;
+      ensureAudio();
       refreshStatus().then(() => {
         if (!keysReady) return;
-        return startConversation();
+        return startConversation(true);
       }).catch((error) => {
         showError(error.message);
         endConversation(false);
@@ -606,10 +715,34 @@
     composer.addEventListener("submit", (event) => {
       event.preventDefault();
       const text = typed.value.trim();
-      if (!text) return;
-      sendJson({ type: "text", text });
+      if (!text || typed.disabled) return;
       typed.value = "";
+      ensureAudio();
+      sendLine(text).catch((error) => {
+        typed.value = text;
+        showError(error.message);
+        endConversation(false);
+      });
     });
+
+    async function sendLine(text) {
+      await refreshStatus();
+      if (!keysReady) {
+        typed.value = text;
+        return;
+      }
+      const socketOpen = socket && socket.readyState === WebSocket.OPEN;
+      if (phase === "connecting" || opening) {
+        pendingLine = text;
+        return;
+      }
+      if (!socketOpen || phase === "idle") {
+        pendingLine = text;
+        await startConversation(false);
+        return;
+      }
+      sendJson({ type: "text", text });
+    }
 
     function fillOptions(status) {
       if (optionsReady) return;
@@ -646,6 +779,7 @@
       model.style.color = "#6f675d";
       model.textContent = modelName;
       keys.append(meta, model);
+      setComposerEnabled(keysReady);
       if (phase === "idle") talk.disabled = false;
       if (!keysReady) {
         const missing = (status.missing && status.missing.length)

@@ -109,6 +109,11 @@ async fn conversation(socket: WebSocket, config: Arc<AppConfig>) -> Result<()> {
     });
 
     let result = drive(&to_client, &mut client_read, &config).await;
+    if let Err(error) = &result {
+        let message = public_error(error, &config);
+        info!(%message, "conversation ended");
+        let _ = send_error(&to_client, &message).await;
+    }
     drop(to_client);
     let _ = writer.await;
     result
@@ -132,11 +137,17 @@ async fn drive(
 
     let missing = config.missing_keys();
     if !missing.is_empty() {
+        let names = missing.join(" and ");
+        let verb = if missing.len() == 1 { "is" } else { "are" };
+        let found = config
+            .env_file
+            .as_deref()
+            .map(|path| format!("Read {path}, but"))
+            .unwrap_or_else(|| "No .env file was found, and".to_string());
         send_error(
             to_client,
             &format!(
-                "Missing {} in the server environment. Copy .env.example to .env and restart.",
-                missing.join(" and ")
+                "{found} {names} {verb} missing. Use those names in the project .env and click Start again."
             ),
         )
         .await?;
@@ -167,12 +178,20 @@ async fn drive(
         .context("missing Gemini key")?;
     let xai_key = config.xai_api_key.as_deref().context("missing xAI key")?;
 
-    let gemini = gemini::connect(gemini_key, &config.model)
-        .await
-        .map_err(|error| anyhow!(trim_error(&error)))?;
-    let grok = grok::connect(xai_key, &voice, &language)
-        .await
-        .map_err(|error| anyhow!(trim_error(&error)))?;
+    let gemini = match gemini::connect(gemini_key, &config.model).await {
+        Ok(socket) => socket,
+        Err(error) => {
+            send_error(to_client, &public_error(&error, config)).await?;
+            return Ok(());
+        }
+    };
+    let grok = match grok::connect(xai_key, &voice, &language).await {
+        Ok(socket) => socket,
+        Err(error) => {
+            send_error(to_client, &public_error(&error, config)).await?;
+            return Ok(());
+        }
+    };
     let (mut gemini_write, mut gemini_read) = gemini.split();
     let (mut grok_write, mut grok_read) = grok.split();
 
@@ -563,16 +582,18 @@ async fn send_error(to_client: &mpsc::Sender<ClientFrame>, message: &str) -> Res
     send(
         to_client,
         Outbound::Error {
-            message: clip_message(message),
+            message: message.chars().take(500).collect(),
         },
     )
     .await
 }
 
-fn trim_error(error: &anyhow::Error) -> String {
-    error.to_string().chars().take(500).collect()
-}
-
-fn clip_message(message: &str) -> String {
-    message.chars().take(500).collect()
+fn public_error(error: &anyhow::Error, config: &AppConfig) -> String {
+    crate::config::redact(
+        &error.to_string(),
+        &[
+            config.gemini_api_key.as_deref(),
+            config.xai_api_key.as_deref(),
+        ],
+    )
 }

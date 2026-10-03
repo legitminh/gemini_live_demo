@@ -22,6 +22,9 @@ use crate::config::{languages, voices, AppConfig};
 #[derive(Clone)]
 struct AppState {
     config: Arc<AppConfig>,
+    /// Production re-reads `.env` on each status check and conversation.
+    /// Tests pin a config so they do not depend on the developer machine.
+    reload_env: bool,
 }
 
 #[derive(Serialize)]
@@ -29,13 +32,15 @@ struct StatusBody {
     gemini: bool,
     xai: bool,
     model: String,
+    env_file: Option<String>,
+    missing: Vec<&'static str>,
     voices: &'static [config::VoiceChoice],
     languages: &'static [config::LanguageChoice],
 }
 
 #[tokio::main]
 async fn main() {
-    let _ = dotenvy::dotenv();
+    let config = Arc::new(AppConfig::load());
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -43,15 +48,20 @@ async fn main() {
         )
         .init();
 
-    let config = Arc::new(AppConfig::from_env());
     let missing = config.missing_keys();
     if missing.is_empty() {
-        tracing::info!(model = %config.model, port = config.port, "starting voice booth");
+        tracing::info!(
+            model = %config.model,
+            port = config.port,
+            env_file = config.env_file.as_deref().unwrap_or("environment"),
+            "starting voice booth"
+        );
     } else {
         tracing::warn!(
             missing = %missing.join(", "),
+            env_file = config.env_file.as_deref().unwrap_or("none"),
             port = config.port,
-            "starting without API keys; conversation cannot connect until they are set"
+            "API keys are missing; the page will say which names to set"
         );
     }
 
@@ -60,18 +70,23 @@ async fn main() {
         .expect("failed to bind port");
     let address = listener.local_addr().expect("local address");
     tracing::info!("open http://{address}");
-    axum::serve(listener, router(config))
+    axum::serve(listener, router_with(config, true))
         .await
         .expect("server exited");
 }
 
+#[cfg(test)]
 fn router(config: Arc<AppConfig>) -> Router {
+    router_with(config, false)
+}
+
+fn router_with(config: Arc<AppConfig>, reload_env: bool) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/pcm-worklet.js", get(worklet))
         .route("/api/status", get(status))
         .route("/ws", get(ws))
-        .with_state(AppState { config })
+        .with_state(AppState { config, reload_env })
 }
 
 async fn index() -> Response {
@@ -94,17 +109,33 @@ async fn worklet() -> Response {
 }
 
 async fn status(State(state): State<AppState>) -> Json<StatusBody> {
-    Json(StatusBody {
-        gemini: state.config.gemini_api_key.is_some(),
-        xai: state.config.xai_api_key.is_some(),
-        model: state.config.model.clone(),
+    let config = if state.reload_env {
+        AppConfig::load()
+    } else {
+        (*state.config).clone()
+    };
+    Json(status_body(&config))
+}
+
+fn status_body(config: &AppConfig) -> StatusBody {
+    StatusBody {
+        gemini: config.gemini_api_key.is_some(),
+        xai: config.xai_api_key.is_some(),
+        model: config.model.clone(),
+        env_file: config.env_file.clone(),
+        missing: config.missing_keys(),
         voices: voices(),
         languages: languages(),
-    })
+    }
 }
 
 async fn ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
-    upgrade.on_upgrade(move |socket| session::run(socket, state.config))
+    let config = if state.reload_env {
+        Arc::new(AppConfig::load())
+    } else {
+        state.config.clone()
+    };
+    upgrade.on_upgrade(move |socket| session::run(socket, config))
 }
 
 #[cfg(test)]
@@ -124,6 +155,7 @@ mod tests {
             xai_api_key: None,
             model: "gemini-3.8-live".into(),
             port: 0,
+            env_file: None,
         })
     }
 

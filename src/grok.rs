@@ -35,6 +35,7 @@ pub fn stream_url(voice: &str, language: &str) -> Result<String> {
 }
 
 pub async fn connect(api_key: &str, voice: &str, language: &str) -> Result<GrokSocket> {
+    crate::gemini::install_crypto_provider();
     let url = stream_url(voice, language)?;
     let mut request = url.into_client_request().context("invalid Grok TTS url")?;
     let header_value = format!("Bearer {api_key}")
@@ -46,7 +47,7 @@ pub async fn connect(api_key: &str, voice: &str, language: &str) -> Result<GrokS
     let (socket, response) = timeout(Duration::from_secs(20), connect_async(request))
         .await
         .context("timed out connecting to Grok Voice")?
-        .context("Grok Voice websocket failed")?;
+        .map_err(|error| crate::gemini::websocket_failure(error, "Grok Voice"))?;
     debug!(status = %response.status(), voice, language, "grok tts websocket opened");
     Ok(socket)
 }

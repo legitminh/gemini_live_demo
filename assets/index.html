@@ -315,6 +315,8 @@
 
     let socket = null;
     let audioCtx = null;
+    let failReason = "";
+    let optionsReady = false;
     let media = null;
     let worklet = null;
     let epoch = 1;
@@ -346,11 +348,13 @@
     }
 
     function showError(message) {
+      failReason = message;
       errorBox.textContent = message;
       errorBox.classList.add("show");
     }
 
     function clearError() {
+      failReason = "";
       errorBox.classList.remove("show");
       errorBox.textContent = "";
     }
@@ -541,8 +545,13 @@
         socket.onerror = () => reject(new Error("Could not open the voice socket"));
       });
       socket.onmessage = (event) => handleMessage(event.data);
-      socket.onerror = () => showError("The voice connection failed.");
+      socket.onerror = () => {
+        if (!failReason) showError("The voice connection failed.");
+      };
       socket.onclose = () => {
+        if (phase !== "idle" && !failReason) {
+          showError("The voice session closed before it was ready. The message above, or the server log, has the reason.");
+        }
         if (phase !== "idle") endConversation(false);
       };
       sendJson({
@@ -574,7 +583,7 @@
         audioCtx = null;
       }
       setPhase("idle");
-      talk.disabled = !keysReady;
+      talk.disabled = false;
       stopBtn.disabled = true;
       typed.disabled = true;
       sendBtn.disabled = true;
@@ -584,7 +593,11 @@
     }
 
     talk.addEventListener("click", () => {
-      if (phase === "idle") startConversation().catch((error) => {
+      if (phase !== "idle") return;
+      refreshStatus().then(() => {
+        if (!keysReady) return;
+        return startConversation();
+      }).catch((error) => {
         showError(error.message);
         endConversation(false);
       });
@@ -598,36 +611,70 @@
       typed.value = "";
     });
 
-    fetch("/api/status")
-      .then((response) => response.json())
-      .then((status) => {
-        keysReady = status.gemini && status.xai;
-        modelName = status.model;
-        for (const voice of status.voices) {
-          const option = document.createElement("option");
-          option.value = voice.id;
-          option.textContent = voice.name + " — " + voice.note;
-          if (voice.id === "eve") option.selected = true;
-          voiceSelect.append(option);
-        }
-        for (const language of status.languages) {
-          const option = document.createElement("option");
-          option.value = language.id;
-          option.textContent = language.name;
-          languageSelect.append(option);
-        }
-        const geminiDot = status.gemini ? "on" : "";
-        const xaiDot = status.xai ? "on" : "";
-        keys.innerHTML =
-          "<div><span class='dot " + geminiDot + "'></span><strong>Gemini</strong> " + (status.gemini ? "key set" : "needs GEMINI_API_KEY") + "</div>" +
-          "<div><span class='dot " + xaiDot + "'></span><strong>Grok</strong> " + (status.xai ? "key set" : "needs XAI_API_KEY") + "</div>" +
-          "<div style='margin-top:6px;color:#6f675d'>" + modelName + "</div>";
-        talk.disabled = !keysReady;
-        if (!keysReady) {
-          showError("The server needs GEMINI_API_KEY and XAI_API_KEY before a conversation can start.");
-        }
-      })
-      .catch(() => showError("Could not read /api/status"));
+    function fillOptions(status) {
+      if (optionsReady) return;
+      optionsReady = true;
+      for (const voice of status.voices) {
+        const option = document.createElement("option");
+        option.value = voice.id;
+        option.textContent = voice.name + " — " + voice.note;
+        if (voice.id === "eve") option.selected = true;
+        voiceSelect.append(option);
+      }
+      for (const language of status.languages) {
+        const option = document.createElement("option");
+        option.value = language.id;
+        option.textContent = language.name;
+        languageSelect.append(option);
+      }
+    }
+
+    function applyStatus(status) {
+      keysReady = Boolean(status.gemini && status.xai);
+      modelName = status.model || modelName;
+      fillOptions(status);
+      keys.replaceChildren();
+      keys.append(
+        keyLine(status.gemini, "Gemini", status.gemini ? "key set" : "needs GEMINI_API_KEY"),
+        keyLine(status.xai, "Grok", status.xai ? "key set" : "needs XAI_API_KEY"),
+      );
+      const meta = document.createElement("div");
+      meta.style.marginTop = "6px";
+      meta.style.color = "#6f675d";
+      meta.textContent = status.env_file ? status.env_file : "No .env file found";
+      const model = document.createElement("div");
+      model.style.color = "#6f675d";
+      model.textContent = modelName;
+      keys.append(meta, model);
+      if (phase === "idle") talk.disabled = false;
+      if (!keysReady) {
+        const missing = (status.missing && status.missing.length)
+          ? status.missing.join(" and ")
+          : "GEMINI_API_KEY and XAI_API_KEY";
+        const where = status.env_file
+          ? "Read " + status.env_file + ", but " + missing + " is missing."
+          : "No .env file found. Run the server from the project folder that contains .env.";
+        showError(where + " Use GEMINI_API_KEY and XAI_API_KEY, then click Start again.");
+      } else if (phase === "idle") {
+        clearError();
+      }
+    }
+
+    function keyLine(ok, name, detail) {
+      const row = document.createElement("div");
+      const dot = document.createElement("span");
+      dot.className = "dot" + (ok ? " on" : "");
+      const strong = document.createElement("strong");
+      strong.textContent = name;
+      row.append(dot, document.createTextNode(" "), strong, document.createTextNode(" " + detail));
+      return row;
+    }
+
+    function refreshStatus() {
+      return fetch("/api/status").then((response) => response.json()).then(applyStatus);
+    }
+
+    refreshStatus().catch(() => showError("Could not read /api/status"));
   </script>
 </body>
 </html>
